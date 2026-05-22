@@ -161,11 +161,11 @@ export default function DocsOverlay({ close }) {
       {/* Hero Section */}
       <div className="max-w-7xl mx-auto px-6 pt-32 pb-20">
         <h1 className="text-7xl md:text-8xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
-          Multi-Tenant Saas
+          Multi-Tenant System
         </h1>
-        <h2 className="text-7xl md:text-8xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
+        <p className="text-4xl md:text-6xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
           Documentation
-        </h2>
+        </p>
         <p className="text-2xl md:text-3xl text-gray-400 font-light max-w-2xl leading-relaxed">
           The complete technical reference for the multi-tenant API connector and local RAG system.
         </p>

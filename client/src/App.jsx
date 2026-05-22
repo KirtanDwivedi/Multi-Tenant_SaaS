@@ -309,8 +309,8 @@ export default function App() {
               <h1 className="text-7xl md:text-8xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
                 Multi-Tenant System
               </h1>
-              <p className="text-gray-400 text-center max-w-md">
-                Connect your APIs, scrape data, and chat with your connected sources using AI.
+              <p className="text-center text-3xl md:text-4xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
+                Connect your APIs, scrape data, and chat with your connected sources using AI
               </p>
               <div className="flex gap-4">
                 <button 
