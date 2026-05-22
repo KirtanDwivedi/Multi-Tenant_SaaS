@@ -306,7 +306,9 @@ export default function App() {
         <div ref={messagesEndRef} className="flex-1 overflow-y-auto flex flex-col items-center">
           {!isChatActive || messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full space-y-8 px-4">
-              <h1 className="text-4xl md:text-5xl font-bold text-center">Multi-Tenant System</h1>
+              <h1 className="text-7xl md:text-8xl font-bold tracking-tighter mb-10 bg-gradient-to-b from-white to-gray-500 bg-clip-text text-transparent">
+                Multi-Tenant System
+              </h1>
               <p className="text-gray-400 text-center max-w-md">
                 Connect your APIs, scrape data, and chat with your connected sources using AI.
               </p>
