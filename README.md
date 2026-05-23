@@ -2,6 +2,10 @@
 
 A Single Page Application (SPA) that connects to third-party APIs (GitHub, Notion, Discord, StackOverflow), scrapes their data into local JSON storage, and allows an AI chatbot to answer queries based on that data.
 
+![Banner](banner.png)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Features
 
 - **Multi-Tenant API Connections**: Connect multiple APIs (GitHub, Notion, Discord, StackOverflow)
