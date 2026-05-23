@@ -3,6 +3,15 @@ from typing import Optional, Tuple
 
 import httpx
 
+# Skipped when full-repo crawling is added (README-only ingest today).
+BLOCKED_PATH_SEGMENTS = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    "credentials.json",
+    "secrets/",
+}
+
 
 class DataScrapers:
     """Async HTTP scrapers for GitHub and Stack Overflow data extraction."""

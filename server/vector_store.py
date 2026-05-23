@@ -8,7 +8,7 @@ Set VECTOR_STORE=chromadb in .env when ChromaDB is installed and ready.
 import json
 import math
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # json = default for now; chromadb = opt-in when MSVC + pip install succeed
 VECTOR_STORE_MODE = os.getenv("VECTOR_STORE", "json").strip().lower()
@@ -72,11 +72,26 @@ class FallbackKnowledgeCollection:
             )
         self._persist()
 
-    def query(self, query_embeddings: List[List[float]], n_results: int = 3) -> Dict[str, Any]:
+    def query(
+        self,
+        query_embeddings: List[List[float]],
+        n_results: int = 3,
+        source_filters: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         if not self.records:
             return {"documents": [[]], "metadatas": [[]]}
 
         query_vector = query_embeddings[0]
+        candidates = self.records
+        if source_filters:
+            allowed = {name.strip().lower() for name in source_filters if name.strip()}
+            candidates = [
+                record
+                for record in candidates
+                if (record.get("metadata") or {}).get("display_name", "").lower() in allowed
+            ]
+            if not candidates:
+                return {"documents": [[]], "metadatas": [[]]}
 
         def cosine(a: List[float], b: List[float]) -> float:
             dot = sum(x * y for x, y in zip(a, b))
@@ -87,7 +102,7 @@ class FallbackKnowledgeCollection:
             return dot / (norm_a * norm_b)
 
         ranked = sorted(
-            self.records,
+            candidates,
             key=lambda item: cosine(query_vector, item["embedding"]),
             reverse=True,
         )[:n_results]
@@ -96,6 +111,31 @@ class FallbackKnowledgeCollection:
             "documents": [[item["document"] for item in ranked]],
             "metadatas": [[item["metadata"] for item in ranked]],
         }
+
+
+def query_collection(
+    collection: Any,
+    query_embeddings: List[List[float]],
+    n_results: int = 3,
+    source_filters: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Query JSON fallback or Chroma with optional workspace display-name filter."""
+    if isinstance(collection, FallbackKnowledgeCollection):
+        return collection.query(
+            query_embeddings=query_embeddings,
+            n_results=n_results,
+            source_filters=source_filters,
+        )
+
+    kwargs: Dict[str, Any] = {
+        "query_embeddings": query_embeddings,
+        "n_results": n_results,
+    }
+    if source_filters:
+        allowed = [name.strip() for name in source_filters if name.strip()]
+        if allowed:
+            kwargs["where"] = {"display_name": {"$in": allowed}}
+    return collection.query(**kwargs)
 
 
 def get_knowledge_collection(chroma_path: str, collection_name: str):

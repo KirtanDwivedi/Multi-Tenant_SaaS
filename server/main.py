@@ -11,8 +11,9 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel
 
+from prompts import NOT_FOUND_REPLY, build_context_blocks, build_system_prompt
 from scrapers import DataScrapers
-from vector_store import get_knowledge_collection
+from vector_store import get_knowledge_collection, query_collection
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -92,6 +93,8 @@ class ApiEntry(BaseModel):
 
 class ChatMessage(BaseModel):
     message: str
+    # Display names from data.json (rename / displayName) to scope RAG retrieval
+    sources: List[str] = []
 
 
 class LoginRequest(BaseModel):
@@ -206,31 +209,12 @@ async def process_and_vectorize(entry: Dict[str, str]) -> None:
     _write_links(links)
 
 
-def _build_context_blocks(results: Dict[str, Any]) -> str:
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-    blocks: List[str] = []
-
-    for doc_text, meta in zip(documents, metadatas):
-        platform = (meta or {}).get("source_platform", "unknown").upper()
-        display_name = (meta or {}).get("display_name", "workspace")
-        blocks.append(f"[{platform} Workspace Layer ({display_name})]\n{doc_text}")
-
-    return "\n\n".join(blocks)
-
-
-def _run_chat_inference(user_message: str, context: str) -> str:
-    system_prompt = f"""Role: Act as an elite, direct, developer-friendly internal data RAG assistant.
-
-Grounding Rule: Base answers strictly and exclusively on the text provided inside the reference context window.
-
-Absence Rule: If the provided context block does not contain the answer, do not guess or use outside training data. Reply exactly with: "Information not found in your connected application workspaces."
-
-Inline Citations: Format answer claims using bold markdown source tag citations matching the current source data. For example: "According to your **GitHub (My-Repo)** data, ..."
-
-REFERENCE CONTEXT:
-{context if context else "No context available."}
-"""
+def _run_chat_inference(
+    user_message: str,
+    context: str,
+    selected_sources: Optional[List[str]] = None,
+) -> str:
+    system_prompt = build_system_prompt(context, selected_sources)
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -325,20 +309,32 @@ async def chat(request: ChatMessage):
         if embedder is None:
             raise HTTPException(status_code=500, detail="Embedding client is not initialized")
 
+        source_filters = [s.strip() for s in request.sources if s.strip()]
         query_embedding = embedder.embed_query(request.message)
-        results = knowledge_collection.query(
+        results = query_collection(
+            knowledge_collection,
             query_embeddings=[query_embedding],
             n_results=3,
+            source_filters=source_filters or None,
         )
 
-        context = _build_context_blocks(results)
-        answer = _run_chat_inference(request.message, context)
+        context = build_context_blocks(results)
+        answer = _run_chat_inference(
+            request.message,
+            context,
+            selected_sources=source_filters or None,
+        )
 
         metadatas = results.get("metadatas", [[]])[0]
         source_used = "tenant_knowledge"
-        if metadatas:
+        if source_filters:
+            source_used = ", ".join(source_filters)
+        elif metadatas:
             first = metadatas[0] or {}
             source_used = f"{first.get('source_platform', 'unknown')} ({first.get('display_name', 'workspace')})"
+
+        if source_filters and not context.strip():
+            answer = NOT_FOUND_REPLY
 
         return {
             "answer": answer,

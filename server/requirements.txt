@@ -8,6 +8,9 @@ langchain==0.1.12
 langchain-core>=0.1.31,<0.2.0
 langchain-text-splitters>=0.0.2,<0.1.0
 langchain-google-genai==1.0.1
-chromadb==0.4.24
+chromadb>=1.5.0,<2.0.0
+overrides>=7.0.0
 
-# Recommended: Python 3.11 or 3.12 (ChromaDB + NumPy wheels are limited on 3.14)
+# ChromaDB 1.5+ works with NumPy 2.x on Python 3.11–3.14
+# Default VECTOR_STORE=json uses data/chroma_db/fallback_vectors.json (no Chroma required)
+# Set VECTOR_STORE=chromadb after: pip install -r requirements.txt

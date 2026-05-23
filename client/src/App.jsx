@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { PanelLeft, Plus, ExternalLink, User, Send, X, MessageSquare, ChevronDown, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { PanelLeft, Plus, ExternalLink, User, Send, X, MessageSquare, ChevronDown, MoreHorizontal, Pencil, Trash2, Check } from 'lucide-react';
 import DocsOverlay from './components/DocsOverlay';
 
 const API_BASE = "http://localhost:8000/api";
@@ -10,17 +10,18 @@ const DUMMY_APIS = [
   { platform: 'Discord', rename: 'Support Server' },
 ];
 
+const getLinkName = (link) => (link.rename || link.displayName || link.platform || '').trim();
+
 export default function App() {
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [links, setLinks] = useState([]);
   const [conversations, setConversations] = useState([
-    { id: 1, title: "New Conversation" }
+    { id: 1, title: "New Conversation", messages: [], selectedSources: [] }
   ]);
   const [activeConversationId, setActiveConversationId] = useState(1);
   const [openConversationMenuId, setOpenConversationMenuId] = useState(null);
   const [isApiDropdownOpen, setApiDropdownOpen] = useState(false);
   const [isChatActive, setChatActive] = useState(false);
-  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [modal, setModal] = useState(null); // 'add-api', 'login', 'docs', 'user-menu'
   const [userName, setUserName] = useState("User");
@@ -31,6 +32,15 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const apiList = links.length ? links : DUMMY_APIS;
+  const activeConversation = conversations.find((c) => c.id === activeConversationId) ?? conversations[0];
+  const messages = activeConversation?.messages ?? [];
+  const selectedSources = activeConversation?.selectedSources ?? [];
+
+  const patchActiveConversation = (patch) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === activeConversationId ? { ...c, ...patch } : c))
+    );
+  };
 
   // Auto-scroll to bottom of chat when messages change
   useEffect(() => {
@@ -55,31 +65,53 @@ export default function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim()) return;
-    
+
     const userMsg = input;
     setInput("");
     setChatActive(true);
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    const nextMessages = [...messages, { role: 'user', content: userMsg }];
+    patchActiveConversation({ messages: nextMessages });
     setIsLoading(true);
-    
+
     try {
-      const res = await axios.post(`${API_BASE}/chat`, { message: userMsg });
-      // The server returns {answer, source_used, confidence_score}
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: res.data.answer,
-        source: res.data.source_used,
-        confidence: res.data.confidence_score
-      }]);
+      const res = await axios.post(`${API_BASE}/chat`, {
+        message: userMsg,
+        sources: selectedSources.length > 0 ? selectedSources : [],
+      });
+      patchActiveConversation({
+        messages: [
+          ...nextMessages,
+          {
+            role: 'assistant',
+            content: res.data.answer,
+            source: res.data.source_used,
+            confidence: res.data.confidence_score,
+          },
+        ],
+      });
     } catch (e) {
       console.error("Chat error:", e);
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: "Sorry, I encountered an error. Please check if the server is running." 
-      }]);
+      patchActiveConversation({
+        messages: [
+          ...nextMessages,
+          {
+            role: 'assistant',
+            content: "Sorry, I encountered an error. Please check if the server is running.",
+          },
+        ],
+      });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const toggleSource = (link) => {
+    const name = getLinkName(link);
+    if (!name) return;
+    const next = selectedSources.includes(name)
+      ? selectedSources.filter((s) => s !== name)
+      : [...selectedSources, name];
+    patchActiveConversation({ selectedSources: next });
   };
 
   const submitApi = async () => {
@@ -125,28 +157,20 @@ export default function App() {
   const startNewChat = () => {
     const id = Date.now();
     const title = `New Conversation ${conversations.length + 1}`;
-    setConversations(prev => [{ id, title }, ...prev]);
+    setConversations((prev) => [
+      { id, title, messages: [], selectedSources: [] },
+      ...prev,
+    ]);
     setActiveConversationId(id);
     setChatActive(false);
-    setMessages([]);
     setChatTitle(title);
-  };
-
-  const selectLinkChat = (link, index) => {
-    setChatActive(true);
-    setChatTitle(`Chat with ${link.rename || link.platform}`);
-    setMessages([{
-      role: 'assistant',
-      content: `Connected to ${link.platform}: ${link.rename}. Ask me anything about this data source.`,
-      source: 'system',
-      confidence: 1.0
-    }]);
+    setOpenConversationMenuId(null);
   };
 
   const selectConversation = (conversation) => {
     setActiveConversationId(conversation.id);
     setChatTitle(conversation.title);
-    setChatActive(true);
+    setChatActive((conversation.messages?.length ?? 0) > 0);
     setOpenConversationMenuId(null);
   };
 
@@ -178,8 +202,7 @@ export default function App() {
       const fallback = remaining[0];
       setActiveConversationId(fallback.id);
       setChatTitle(fallback.title);
-      setChatActive(false);
-      setMessages([]);
+      setChatActive((fallback.messages?.length ?? 0) > 0);
     }
     setOpenConversationMenuId(null);
   };
@@ -282,14 +305,35 @@ export default function App() {
             Links <ChevronDown size={16} className="text-gray-400" />
           </button>
           {isApiDropdownOpen && (
-            <div className="absolute left-0 top-12 z-30 w-72 bg-[#171717] border border-white/10 rounded-xl shadow-2xl p-2">
-              <p className="text-xs text-gray-400 px-2 py-1">Connected APIs ({apiList.length})</p>
-              {apiList.map((api, idx) => (
-                <div key={`${api.rename}-${idx}`} className="px-2 py-2 rounded-lg hover:bg-white/5 flex items-center justify-between">
-                  <span className="text-sm truncate">{api.rename}</span>
-                  <span className="text-xs text-gray-500">{api.platform}</span>
-                </div>
-              ))}
+            <div className="absolute left-0 top-12 z-30 w-80 bg-[#171717] border border-white/10 rounded-xl shadow-2xl p-2">
+              <p className="text-xs text-gray-400 px-2 py-1">
+                Sources for this chat — click to select ({selectedSources.length} selected)
+              </p>
+              <p className="text-[11px] text-gray-500 px-2 pb-2">
+                RAG uses only chosen workspaces. None selected = search all.
+              </p>
+              {apiList.map((api, idx) => {
+                const name = getLinkName(api);
+                const isSelected = selectedSources.includes(name);
+                return (
+                  <button
+                    key={`${name}-${idx}`}
+                    type="button"
+                    onClick={() => toggleSource(api)}
+                    className={`w-full text-left px-2 py-2 rounded-lg flex items-center justify-between gap-2 transition-colors ${
+                      isSelected
+                        ? 'bg-white/15 ring-1 ring-white/25'
+                        : 'hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="text-sm truncate flex items-center gap-2">
+                      {isSelected && <Check size={14} className="text-green-400 flex-shrink-0" />}
+                      {name}
+                    </span>
+                    <span className="text-xs text-gray-500 flex-shrink-0">{api.platform}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
           </div>
@@ -364,6 +408,25 @@ export default function App() {
 
         {/* Input Box */}
         <div className="absolute bottom-0 left-0 right-0 p-4 pb-6 bg-gradient-to-t from-[#212121] via-[#212121] to-transparent">
+          <div className="max-w-3xl mx-auto">
+            {selectedSources.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2 justify-center">
+                {selectedSources.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => patchActiveConversation({
+                      selectedSources: selectedSources.filter((s) => s !== name),
+                    })}
+                    className="text-xs bg-white/10 hover:bg-white/15 px-2 py-1 rounded-full flex items-center gap-1"
+                    title="Click to deselect"
+                  >
+                    {name} <X size={12} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="max-w-3xl mx-auto relative">
             <textarea 
               rows="1"
