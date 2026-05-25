@@ -27,9 +27,16 @@ if not GEMINI_API_KEY:
 PLACEHOLDER_KEYS = {"", "YOUR_API_KEY", "your_actual_google_gemini_api_key_here", "your_gemini_key_here"}
 GEMINI_READY = GEMINI_API_KEY not in PLACEHOLDER_KEYS
 
-DATA_DIR = "data"
+# Force absolute pathing relative to the script location
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
 DATA_PATH = os.path.join(DATA_DIR, "data.json")
-CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
+CONTENT_PATH = os.path.join(DATA_DIR, "content.json")
+FALLBACK_PATH = os.path.join(DATA_DIR, "chromadb", "fallback_vectors.json")
+
+# Match folder layout
+CHROMA_PATH = os.path.join(DATA_DIR, "chromadb")
 COLLECTION_NAME = "tenant_knowledge"
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -51,11 +58,13 @@ def _get_embeddings_client():
     if embeddings_client is None:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
+        # Default model with text-embedding fallback handling
         embeddings_client = GoogleGenerativeAIEmbeddings(  # type: ignore[misc]
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             google_api_key=GEMINI_API_KEY,
         )
     return embeddings_client
+
 
 scrapers = DataScrapers()
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=60)
@@ -78,7 +87,6 @@ class ApiEntry(BaseModel):
     apiKey: str = ""
     displayName: str = ""
     targetUrl: str = ""
-    # Legacy frontend field support
     rename: str = ""
 
     def normalized(self) -> Dict[str, str]:
@@ -93,7 +101,6 @@ class ApiEntry(BaseModel):
 
 class ChatMessage(BaseModel):
     message: str
-    # Display names from data.json (rename / displayName) to scope RAG retrieval
     sources: List[str] = []
 
 
@@ -110,8 +117,13 @@ def _utc_now() -> str:
 
 
 def _read_links() -> List[Dict[str, Any]]:
-    with open(DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if not os.path.exists(DATA_PATH):
+        return []
+    try:
+        with open(DATA_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return []
 
 
 def _write_links(links: List[Dict[str, Any]]) -> None:
@@ -140,12 +152,56 @@ def _resolve_target_url(entry: Dict[str, str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fallback Vector Parser Engine
+# ---------------------------------------------------------------------------
+def _query_fallback_json(query_text: str, source_filters: Optional[List[str]] = None) -> Dict[str, List]:
+    """
+    Simulates ChromaDB outputs by matching documents from the backup fallback JSON cache file.
+    """
+    results = {"documents": [[]], "metadatas": [[]], "ids": [[]]}
+    if not os.path.exists(FALLBACK_PATH):
+        return results
+
+    try:
+        with open(FALLBACK_PATH, "r", encoding="utf-8") as f:
+            cached_data = json.load(f)
+
+        matched_records = []
+        for item in cached_data:
+            meta = item.get("metadata", {})
+            display_name = meta.get("display_name", "")
+
+            # Apply strict scoping query filter maps if supplied by request
+            if source_filters and display_name not in source_filters:
+                continue
+            matched_records.append(item)
+
+        # Basic text matching fallback logic
+        query_words = query_text.lower().split()
+        scored_records = []
+        for item in matched_records:
+            doc_content = item.get("document", "").lower()
+            score = sum(1 for word in query_words if word in doc_content)
+            scored_records.append((score, item))
+
+        scored_records.sort(key=lambda x: x[0], reverse=True)
+        top_3 = scored_records[:3]
+
+        for _, item in top_3:
+            results["documents"][0].append(item.get("document", ""))
+            results["metadatas"][0].append(item.get("metadata", {}))
+            results["ids"][0].append(item.get("id", ""))
+
+    except Exception as e:
+        print(f"[Fallback Parser Exception] Reading fallback matrix failed: {e}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Ingestion pipeline
 # ---------------------------------------------------------------------------
 async def process_and_vectorize(entry: Dict[str, str]) -> None:
-    """
-    Scrape source data, chunk it, embed with Gemini, and persist in ChromaDB.
-    """
     platform = entry["platform"]
     display_name = entry["displayName"]
     target_url = _resolve_target_url(entry)
@@ -185,17 +241,30 @@ async def process_and_vectorize(entry: Dict[str, str]) -> None:
 
     embedder = _get_embeddings_client()
     if embedder is None:
-        print(
-            "[ingestion] GEMINI_API_KEY is placeholder. Skipping vectorization until a real key is set."
-        )
+        print("[ingestion] GEMINI_API_KEY is placeholder. Skipping vectorization.")
     else:
-        vectors = embedder.embed_documents(texts)
-        knowledge_collection.add(
-            ids=ids,
-            documents=texts,
-            metadatas=metadatas,
-            embeddings=vectors,
-        )
+        try:
+            vectors = embedder.embed_documents(texts)
+            knowledge_collection.add(
+                ids=ids,
+                documents=texts,
+                metadatas=metadatas,
+                embeddings=vectors,
+            )
+        except Exception as vec_err:
+            print(f"[Ingestion Error] Writing directly to Chroma database matrix failed: {vec_err}")
+            # Automatically save locally if the direct SQLite injection fails
+            fallback_records = []
+            if os.path.exists(FALLBACK_PATH):
+                try:
+                    with open(FALLBACK_PATH, "r", encoding="utf-8") as f:
+                        fallback_records = json.load(f)
+                except Exception:
+                    pass
+            for chunk_id, txt, mt in zip(ids, texts, metadatas):
+                fallback_records.append({"id": chunk_id, "document": txt, "metadata": mt})
+            with open(FALLBACK_PATH, "w", encoding="utf-8") as f:
+                json.dump(fallback_records, f, indent=2)
 
     links = _read_links()
     for item in links:
@@ -219,10 +288,11 @@ def _run_chat_inference(
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         temperature=0.1,
-        google_api_key=GEMINI_API_KEY,
+        api_key=GEMINI_API_KEY,
     )
+
     response = llm.invoke(
         [
             ("system", system_prompt),
@@ -242,7 +312,7 @@ async def root():
         "status": "running",
         "gemini_configured": GEMINI_READY,
         "collection": COLLECTION_NAME,
-        "vector_backend": vector_backend,
+        "vector_backend": "chroma_with_fallback" if os.path.exists(FALLBACK_PATH) else vector_backend,
     }
 
 
@@ -270,7 +340,6 @@ async def add_api(entry: ApiEntry, background_tasks: BackgroundTasks):
             "displayName": normalized["displayName"],
             "targetUrl": normalized["targetUrl"],
             "last_synced": None,
-            # Keep legacy key for current frontend compatibility
             "rename": normalized["displayName"],
         }
 
@@ -297,10 +366,7 @@ async def chat(request: ChatMessage):
     try:
         if not GEMINI_READY:
             return {
-                "answer": (
-                    "Gemini API key is not configured yet. Set GEMINI_API_KEY in server/.env "
-                    "to enable RAG chat responses."
-                ),
+                "answer": "Gemini API key is not configured yet. Set GEMINI_API_KEY in server/.env.",
                 "source_used": "system",
                 "confidence_score": 0.0,
             }
@@ -310,13 +376,27 @@ async def chat(request: ChatMessage):
             raise HTTPException(status_code=500, detail="Embedding client is not initialized")
 
         source_filters = [s.strip() for s in request.sources if s.strip()]
-        query_embedding = embedder.embed_query(request.message)
-        results = query_collection(
-            knowledge_collection,
-            query_embeddings=[query_embedding],
-            n_results=3,
-            source_filters=source_filters or None,
-        )
+        
+        # Flag to check if standard chroma data returned rows
+        has_chroma_records = False
+        results = {"documents": [[]], "metadatas": [[]], "ids": [[]]}
+
+        try:
+            query_embedding = embedder.embed_query(request.message)
+            results = query_collection(
+                knowledge_collection,
+                query_embeddings=[query_embedding],
+                n_results=3,
+                source_filters=source_filters or None,
+            )
+            if results and results.get("documents") and results["documents"][0]:
+                has_chroma_records = True
+        except Exception as chroma_err:
+            print(f"[Runtime Safety Alert] Direct Chroma Query failed: {chroma_err}. Checking fallback index...")
+
+        # Execute fallback query parsing if SQLite collections return empty blocks
+        if not has_chroma_records:
+            results = _query_fallback_json(request.message, source_filters=source_filters or None)
 
         context = build_context_blocks(results)
         answer = _run_chat_inference(
@@ -325,13 +405,15 @@ async def chat(request: ChatMessage):
             selected_sources=source_filters or None,
         )
 
+        # Extract safely to avoid IndexError strings
         metadatas = results.get("metadatas", [[]])[0]
         source_used = "tenant_knowledge"
+        
         if source_filters:
             source_used = ", ".join(source_filters)
-        elif metadatas:
+        elif metadatas and len(metadatas) > 0:
             first = metadatas[0] or {}
-            source_used = f"{first.get('source_platform', 'unknown')} ({first.get('display_name', 'workspace')})"
+            source_used = f"{first.get('source_platform', 'fallback')} ({first.get('display_name', 'workspace')})"
 
         if source_filters and not context.strip():
             answer = NOT_FOUND_REPLY
@@ -339,7 +421,7 @@ async def chat(request: ChatMessage):
         return {
             "answer": answer,
             "source_used": source_used,
-            "confidence_score": 0.85 if context else 0.2,
+            "confidence_score": 0.85 if context.strip() else 0.2,
         }
     except HTTPException:
         raise
@@ -386,7 +468,6 @@ async def github_webhook(background_tasks: BackgroundTasks, payload: Dict[str, A
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# Legacy endpoints kept for current frontend compatibility
 @app.post("/api/login")
 async def login(request: LoginRequest):
     user_name = request.email.split("@")[0] if request.email else "user"

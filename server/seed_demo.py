@@ -17,6 +17,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import time
 
 import httpx
 from dotenv import load_dotenv
@@ -26,12 +27,30 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from scrapers import DataScrapers
 from vector_store import get_knowledge_collection
 
+# --- BULLETPROOF ERROR CATCHING IMPORTS ---
+try:
+    from google.api_core.exceptions import ResourceExhausted
+except ImportError:
+    ResourceExhausted = Exception
+
+try:
+    from langchain_google_genai._common import GoogleGenerativeAIError
+except ImportError:
+    GoogleGenerativeAIError = Exception
+# ------------------------------------------
+
 load_dotenv()
 
-DATA_DIR = "data"
+
+# Force absolute pathing relative to the script location
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
 DATA_PATH = os.path.join(DATA_DIR, "data.json")
 CONTENT_PATH = os.path.join(DATA_DIR, "content.json")
-CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
+
+# Match your exact folder layout (chromadb instead of chroma_db)
+CHROMA_PATH = os.path.join(DATA_DIR, "chromadb")
 COLLECTION_NAME = "tenant_knowledge"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -229,7 +248,7 @@ def _get_embedder():
     from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
     return GoogleGenerativeAIEmbeddings(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         google_api_key=GEMINI_API_KEY,
     )
 
@@ -311,8 +330,38 @@ def _embed_harvest(harvested: List[Dict[str, str]], embedder) -> int:
             all_texts.append(chunk.page_content)
             all_metas.append(chunk.metadata)
 
-    print(f"Embedding {len(all_texts)} chunks ...")
-    vectors = embedder.embed_documents(all_texts)
+    print(f"Embedding {len(all_texts)} chunks in rate-limited batches with auto-retry...")
+    
+    # --- BULLETPROOF RETRY LOOP IMPLEMENTATION ---
+    BATCH_SIZE = 25  # Lower structural density to balance global Token-Per-Minute restrictions
+    vectors = []
+    
+    i = 0
+    while i < len(all_texts):
+        batch_texts = all_texts[i:i + BATCH_SIZE]
+        current_batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(all_texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        print(f"  -> Processing batch {current_batch_num}/{total_batches} ({len(batch_texts)} chunks)...")
+        
+        try:
+            batch_vectors = embedder.embed_documents(batch_texts)
+            vectors.extend(batch_vectors)
+            i += BATCH_SIZE  # Progress only when the API cleanly responds
+            
+            # Short proactive rest period between successful processing windows
+            if i < len(all_texts):
+                time.sleep(4.0)
+                
+        except (ResourceExhausted, GoogleGenerativeAIError, Exception) as e:
+            # Handle the 429 quota exception explicitly, sleep off the lock, then recalculate
+            print(f"\n[!] Rate limit reached or backend timeout encountered.")
+            print(f"    Details: {e}")
+            print("    Pausing execution for 25 seconds to clear Google API Free Tier quota tokens...")
+            time.sleep(25.0)
+            print("    Resuming and retrying current batch transaction...\n")
+    # ---------------------------------------------
+
     collection.add(ids=all_ids, documents=all_texts, metadatas=all_metas, embeddings=vectors)
     print(f"Stored {len(all_texts)} vectors in {backend}.")
     return len(all_texts)

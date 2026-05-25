@@ -1,16 +1,17 @@
 fastapi==0.110.0
 uvicorn==0.28.0
 starlette>=0.36.3,<0.37.0
-pydantic==2.6.4
+pydantic>=2.7.4,<3.0.0
 python-dotenv==1.0.1
 httpx==0.27.0
-langchain==0.1.12
-langchain-core>=0.1.31,<0.2.0
-langchain-text-splitters>=0.0.2,<0.1.0
-langchain-google-genai==1.0.1
+langchain>=0.2.0,<0.3.0
+langchain-core>=0.2.0,<0.3.0
+langchain-text-splitters>=0.2.0,<0.3.0
+langchain-google-genai>=1.0.1,<2.0.0
 chromadb>=1.5.0,<2.0.0
 overrides>=7.0.0
 
-# ChromaDB 1.5+ works with NumPy 2.x on Python 3.11–3.14
+# ChromaDB 1.5+ works with NumPy 1.x on Python 3.11–3.14
 # Default VECTOR_STORE=json uses data/chroma_db/fallback_vectors.json (no Chroma required)
 # Set VECTOR_STORE=chromadb after: pip install -r requirements.txt
+numpy>=1.26.0,<2.0.0
