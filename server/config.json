@@ -1,0 +1,8 @@
+{
+  "ALLOWED_DOMAIN": "thapar.edu",
+  "MAIL_USERNAME": "your_gmail_address@gmail.com",
+  "MAIL_PASSWORD": "your_google_app_password",
+  "MAIL_FROM": "your_gmail_address@gmail.com",
+  "MAIL_PORT": 587,
+  "MAIL_SERVER": "://gmail.com"
+}
