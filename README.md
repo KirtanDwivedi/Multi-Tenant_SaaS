@@ -12,6 +12,15 @@ An enterprise-grade, developer-first Single Page Application (SPA) designed to u
 
 ---
 
+# Site Preview
+
+Below are sample screenshots of the live team site, showcasing the user interface, layout, and core features.
+
+![preview_main](1.jpeg)
+![dashboard](2.jpeg)
+
+---
+
 ## Table of Contents
 
 - [Core Features](#core-features)
